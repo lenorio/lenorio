@@ -10,6 +10,7 @@
 
 <p align="center">
   <a href="https://vk.com/lenorio"><img src="https://img.shields.io/badge/VK-0077FF?style=for-the-badge&logo=vk&logoColor=white" alt="VK"></a>
+  <a href="https://open.spotify.com/user/31iovpidmmpcfbzeeubewllgvqsi?si=953376c116d1475a"><img src="https://img.shields.io/badge/Spotify-1DB954?style=for-the-badge&logo=spotify&logoColor=white" alt="Spotify"></a>
   <a href="https://lenorio.moscow"><img src="https://img.shields.io/badge/Website-000000?style=for-the-badge&logo=google-chrome&logoColor=white" alt="Web"></a>
   <a href="https://fakecrime.bio/rm"><img src="https://img.shields.io/badge/Fakecrime-FF0000?style=for-the-badge&logo=linktree&logoColor=white" alt="Fakecrime"></a>
 </p>
