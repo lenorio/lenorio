@@ -4,7 +4,7 @@
     window.plugin_lordfilm_ready = true;
 
     var PLUGIN_NAME = 'Lordfilm.fi';
-    var PLUGIN_VERSION = '1.0.2';
+    var PLUGIN_VERSION = '1.0.3';
     var DEFAULT_DOMAIN = 'https://lordfilm.fi';
     var BALANCER_HOST = 'https://api.ortified.ws';
 
@@ -103,10 +103,14 @@
             var _this = this;
 
             filter.onSelect = function (type, a, b) {
-                if (type === 'filter') {
+                if (type === 'filter' && a && b) {
                     choice[a.stype] = b.index;
-                    _this.applyFilter();
+                    _this.applyFilter(a.stype);
                 }
+            };
+
+            filter.onBack = function () {
+                _this.start();
             };
 
             filter.render().find('.filter--sort').remove();
@@ -340,7 +344,7 @@
             filter_items.season = [];
             filter_items.voice = [];
 
-            if (playerData.playlist && playerData.playlist.seasons) {
+            if (playerData && playerData.playlist && playerData.playlist.seasons) {
                 playerData.playlist.seasons.sort(function (a, b) {
                     return a.season - b.season;
                 });
@@ -353,43 +357,89 @@
 
                 var curSeason = playerData.playlist.seasons[choice.season];
                 if (curSeason && curSeason.episodes && curSeason.episodes[0] && curSeason.episodes[0].audio) {
-                    filter_items.voice = curSeason.episodes[0].audio.names || [];
+                    var names = curSeason.episodes[0].audio.names || [];
+                    filter_items.voice = names.filter(function (n) { return n && n !== 'delete'; });
                 }
-            } else if (playerData.source && playerData.source.audio) {
-                filter_items.voice = playerData.source.audio.names || [];
+            } else if (playerData && playerData.source && playerData.source.audio) {
+                var names = playerData.source.audio.names || [];
+                filter_items.voice = names.filter(function (n) { return n && n !== 'delete'; });
             }
 
             if (choice.voice >= filter_items.voice.length) choice.voice = 0;
 
-            var toFilter = {};
-            if (filter_items.release.length > 1) toFilter.release = filter_items.release;
-            if (filter_items.season.length > 0) toFilter.season = filter_items.season;
-            if (filter_items.voice.length > 1) toFilter.voice = filter_items.voice;
+            var filterGroups = [];
 
-            filter.set('filter', toFilter);
-            filter.chosen('filter', choice);
+            if (filter_items.release.length > 1) {
+                filterGroups.push({
+                    title: 'Релиз',
+                    subtitle: filter_items.release[choice.release] || '',
+                    stype: 'release',
+                    items: filter_items.release.map(function (title, idx) {
+                        return {
+                            title: title,
+                            index: idx,
+                            selected: idx === choice.release
+                        };
+                    })
+                });
+            }
+
+            if (filter_items.season.length > 1) {
+                filterGroups.push({
+                    title: Lampa.Lang.translate('torrent_serial_season') || 'Сезон',
+                    subtitle: filter_items.season[choice.season] || '',
+                    stype: 'season',
+                    items: filter_items.season.map(function (title, idx) {
+                        return {
+                            title: title,
+                            index: idx,
+                            selected: idx === choice.season
+                        };
+                    })
+                });
+            }
+
+            if (filter_items.voice.length > 1) {
+                filterGroups.push({
+                    title: Lampa.Lang.translate('torrent_parser_voice') || 'Озвучка',
+                    subtitle: filter_items.voice[choice.voice] || '',
+                    stype: 'voice',
+                    items: filter_items.voice.map(function (title, idx) {
+                        return {
+                            title: title,
+                            index: idx,
+                            selected: idx === choice.voice
+                        };
+                    })
+                });
+            }
+
+            filter.set('filter', filterGroups);
+
+            var chosen = [];
+            if (filter_items.season.length > 0 && filter_items.season[choice.season]) {
+                chosen.push(filter_items.season[choice.season]);
+            }
+            if (filter_items.voice.length > 0 && filter_items.voice[choice.voice]) {
+                chosen.push(filter_items.voice[choice.voice]);
+            }
+            filter.chosen('filter', chosen);
         };
 
         // Применение изменений в фильтре
-        this.applyFilter = function () {
-            if (filter_items.release.length > 1 && releases[choice.release] && releases[choice.release] !== selected_release) {
-                this.loadRelease(releases[choice.release]);
-                return;
-            }
-
-            if (playerData && playerData.playlist && playerData.playlist.seasons) {
-                var curSeason = playerData.playlist.seasons[choice.season];
-                if (curSeason && curSeason.episodes && curSeason.episodes[0] && curSeason.episodes[0].audio) {
-                    filter_items.voice = curSeason.episodes[0].audio.names || [];
-                    if (choice.voice >= filter_items.voice.length) choice.voice = 0;
-                    filter.set('filter', {
-                        season: filter_items.season,
-                        voice: filter_items.voice
-                    });
-                    filter.chosen('filter', choice);
+        this.applyFilter = function (stype) {
+            if (stype === 'release') {
+                if (filter_items.release.length > 1 && releases[choice.release] && releases[choice.release] !== selected_release) {
+                    this.loadRelease(releases[choice.release]);
+                    return;
                 }
             }
 
+            if (stype === 'season') {
+                choice.voice = 0;
+            }
+
+            this.buildFilters();
             this.renderList();
         };
 
@@ -492,11 +542,14 @@
                         return { label: sub.name, url: sub.url };
                     });
 
+                    var view = Lampa.Timeline.view(fileHash);
+                    item.append(Lampa.Timeline.render(view));
+
                     var playCell = {
                         title: search_title + ' (' + seasonObj.season + 'x' + ep.episode + ')',
                         url: streamUrl,
                         subtitles: subtitles,
-                        timeline: { hash: fileHash }
+                        timeline: view
                     };
                     playlist.push(playCell);
 
@@ -541,11 +594,14 @@
                     '</div>'
                 ].join(''));
 
+                var view = Lampa.Timeline.view(fileHash);
+                item.append(Lampa.Timeline.render(view));
+
                 var playCell = {
                     title: (playerData.title || search_title) + ' [' + currentVoice + ']',
                     url: streamUrl,
                     subtitles: subtitles,
-                    timeline: { hash: fileHash }
+                    timeline: view
                 };
 
                 item.on('hover:enter', function () {
@@ -604,8 +660,8 @@
         this.start = function () {
             Lampa.Controller.add('content', {
                 toggle: function () {
-                    Lampa.Controller.collectionSet(scroll.render());
-                    Lampa.Controller.collectionFocus(last_focus || false, scroll.render());
+                    Lampa.Controller.collectionSet(scroll.render(), files.render(true));
+                    Lampa.Controller.collectionFocus(last_focus || false, scroll.render(true));
                 },
                 left: function () {
                     if (Navigator.canmove('left')) Navigator.move('left');
