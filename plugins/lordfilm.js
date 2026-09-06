@@ -6,7 +6,7 @@
     window.plugin_lordfilm_ready = true;
 
     var PLUGIN_NAME = 'Lordfilm.fi';
-    var PLUGIN_VERSION = '1.0.0';
+    var PLUGIN_VERSION = '1.0.1';
     var DEFAULT_DOMAIN = 'https://lordfilm.fi';
     var BALANCER_HOST = 'https://api.ortified.ws';
 
@@ -20,7 +20,7 @@
     }
 
     function getProxyType() {
-        return Lampa.Storage.get('lordfilm_proxy', 'auto');
+        return Lampa.Storage.get('lordfilm_proxy', 'none');
     }
 
     function getCustomProxy() {
@@ -29,35 +29,13 @@
         return p;
     }
 
-    // Применение прокси (если требуется для браузера / CORS)
+    // Применение прокси (если задан пользователем в настройках)
     function applyProxy(url) {
         var type = getProxyType();
-        if (type === 'none') return url;
-
         if (type === 'custom') {
             var custom = getCustomProxy();
             return custom ? custom + url : url;
         }
-
-        if (type === 'worker1') {
-            return 'https://cors.nb557.workers.dev/' + url;
-        }
-
-        if (type === 'worker2') {
-            return 'https://cors.fx666.workers.dev/' + url;
-        }
-
-        // 'auto': если Lampa запущена в браузере (где есть строгий CORS), используем CORS-прокси.
-        // На Android / ТВ с нативным клиентом запрос отправляется напрямую.
-        if (type === 'auto') {
-            if (Lampa.Platform.is('browser') || (location.protocol === 'http:' || location.protocol === 'https:')) {
-                // Если запущен на lampa.mx или в обычном браузере
-                if (location.hostname.indexOf('lampa') !== -1 || location.hostname.indexOf('localhost') !== -1) {
-                    return 'https://cors.nb557.workers.dev/' + url;
-                }
-            }
-        }
-
         return url;
     }
 
@@ -82,15 +60,14 @@
         style.setAttribute('type', 'text/css');
         style.innerHTML = [
             '.view--lordfilm svg { width: 1.5em; height: 1.5em; margin-right: 0.6em; vertical-align: middle; }',
-            '.lordfilm-item { position: relative; padding: 0.9em 1.2em; display: flex; align-items: center; justify-content: space-between; border-radius: 0.4em; }',
+            '.lordfilm-item { position: relative; padding: 0.9em 1.2em; display: flex; align-items: center; justify-content: space-between; border-radius: 0.4em; cursor: pointer; }',
             '.lordfilm-item__body { flex: 1; min-width: 0; }',
             '.lordfilm-item__title { font-size: 1.15em; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }',
             '.lordfilm-item__details { font-size: 0.85em; color: rgba(255, 255, 255, 0.6); margin-top: 0.3em; display: flex; gap: 0.8em; align-items: center; }',
             '.lordfilm-item__badge { background: rgba(255, 255, 255, 0.15); padding: 0.15em 0.5em; border-radius: 0.25em; font-size: 0.8em; }',
             '.lordfilm-item__icons { display: flex; align-items: center; margin-left: 1em; gap: 0.5em; }',
             '.lordfilm-item__viewed { color: #4cd964; width: 1.3em; height: 1.3em; }',
-            '.lordfilm-item__viewed svg { width: 100%; height: 100%; fill: currentColor; }',
-            '.lordfilm-filter-info { padding: 0.6em 1.2em; font-size: 0.9em; color: rgba(255,255,255,0.5); }'
+            '.lordfilm-item__viewed svg { width: 100%; height: 100%; fill: currentColor; }'
         ].join('\n');
         document.head.appendChild(style);
     }
@@ -108,9 +85,9 @@
         var search_year = parseInt(current_movie.release_date || current_movie.first_air_date || '') || null;
 
         var last_focus = null;
-        var releases = []; // Результаты поиска на lordfilm.fi
+        var releases = [];
         var selected_release = null;
-        var playerData = null; // Распарсенные данные из makePlayer({...})
+        var playerData = null;
 
         var choice = {
             release: 0,
@@ -151,14 +128,49 @@
             this.activity.loader(true);
             scroll.clear();
 
-            // Если у фильма уже есть kinopoisk_id, пробуем загрузить напрямую с балансера
+            // 1. Если есть Kinopoisk ID
             var kp_id = current_movie.kinopoisk_id || current_movie.kp_id;
             if (kp_id) {
-                this.loadBalancer(kp_id, function (success) {
+                this.loadBalancer('kp/' + kp_id, function (success) {
                     if (success) {
                         _this.activity.loader(false);
                     } else {
-                        // Если прямой запрос по KP не дал результатов, ищем через сайт Lordfilm
+                        _this.tryImdbOrSearch();
+                    }
+                });
+            } else {
+                this.tryImdbOrSearch();
+            }
+        };
+
+        // 2. Попытка загрузки через IMDB ID или получение его из TMDB
+        this.tryImdbOrSearch = function () {
+            var _this = this;
+            var imdb_id = current_movie.imdb_id;
+
+            if (imdb_id) {
+                this.loadBalancer('imdb/' + imdb_id, function (success) {
+                    if (success) {
+                        _this.activity.loader(false);
+                    } else {
+                        _this.searchOnLordfilm();
+                    }
+                });
+            } else if (current_movie.id && window.Lampa && Lampa.TMDB && Lampa.TMDB.external_imdb_id) {
+                Lampa.TMDB.external_imdb_id({
+                    id: current_movie.id,
+                    type: (current_movie.name ? 'tv' : 'movie')
+                }, function (found_imdb) {
+                    if (found_imdb) {
+                        current_movie.imdb_id = found_imdb;
+                        _this.loadBalancer('imdb/' + found_imdb, function (success) {
+                            if (success) {
+                                _this.activity.loader(false);
+                            } else {
+                                _this.searchOnLordfilm();
+                            }
+                        });
+                    } else {
                         _this.searchOnLordfilm();
                     }
                 });
@@ -167,7 +179,7 @@
             }
         };
 
-        // Поиск по сайту lordfilm.fi
+        // 3. Прямой поиск на сайте lordfilm.fi
         this.searchOnLordfilm = function () {
             var _this = this;
             var domain = getDomain();
@@ -179,6 +191,7 @@
             }
 
             if (!query) {
+                this.activity.loader(false);
                 this.showEmpty('Не указано название для поиска');
                 return;
             }
@@ -187,36 +200,26 @@
 
             network.clear();
             network.timeout(12000);
-            network.native(searchUrl, function (html) {
+            network.silent(searchUrl, function (html) {
                 _this.parseSearchResults(html);
             }, function (err) {
-                // Если прямой запрос выдал ошибку, пробуем через резервный прокси
-                var fallbackUrl = 'https://cors.nb557.workers.dev/' + domain + '/index.php?do=search';
-                network.clear();
-                network.timeout(12000);
-                network.native(fallbackUrl, function (html) {
-                    _this.parseSearchResults(html);
-                }, function (err2) {
-                    _this.showEmpty('Ошибка соединения с ' + domain + ' (' + (err2.message || 'сеть недоступна') + ')');
-                }, postData, {
-                    headers: {
-                        'Content-Type': 'application/x-www-form-urlencoded'
-                    }
-                });
+                _this.activity.loader(false);
+                _this.showEmpty('Видео не найдено или ещё не вышло');
             }, postData, {
+                dataType: 'text',
                 headers: {
                     'Content-Type': 'application/x-www-form-urlencoded'
                 }
             });
         };
 
-        // Разбор результатов поиска
+        // Разбор результатов поиска lordfilm.fi
         this.parseSearchResults = function (html) {
-            var _this = this;
             releases = [];
 
             if (!html || html.indexOf('item expand-link') === -1) {
-                this.showEmpty('Ничего не найдено на ' + PLUGIN_NAME);
+                this.activity.loader(false);
+                this.showEmpty('Видео не найдено на ' + PLUGIN_NAME);
                 return;
             }
 
@@ -243,11 +246,11 @@
             }
 
             if (releases.length === 0) {
+                this.activity.loader(false);
                 this.showEmpty('Ничего не найдено по запросу: ' + search_title);
                 return;
             }
 
-            // Выбор наиболее подходящего релиза по году
             var bestIdx = 0;
             if (search_year) {
                 for (var i = 0; i < releases.length; i++) {
@@ -262,7 +265,7 @@
             this.loadRelease(releases[bestIdx]);
         };
 
-        // Загрузка страницы конкретного релиза на lordfilm.fi
+        // Загрузка страницы выбранного релиза lordfilm.fi
         this.loadRelease = function (release) {
             var _this = this;
             this.activity.loader(true);
@@ -272,37 +275,38 @@
 
             network.clear();
             network.timeout(12000);
-            network.native(pageUrl, function (html) {
+            network.silent(pageUrl, function (html) {
                 var kpId = null;
-                // Ищем embed/kp/{id} или в посте uploads/posts/.../{id}_
                 var kpMatch = html.match(/embed\/kp\/(\d+)/) || html.match(/\/uploads\/posts\/[^\/]+\/(\d+)_/);
                 if (kpMatch) kpId = kpMatch[1];
 
                 if (kpId) {
-                    _this.loadBalancer(kpId, function (success) {
+                    _this.loadBalancer('kp/' + kpId, function (success) {
                         _this.activity.loader(false);
                         if (!success) {
-                            _this.showEmpty('Плеер временно недоступен для этого релиза');
+                            _this.showEmpty('Видео пока недоступно для воспроизведения');
                         }
                     });
                 } else {
                     _this.activity.loader(false);
-                    _this.showEmpty('Не удалось извлечь плеер со страницы фильма');
+                    _this.showEmpty('Плеер не найден на странице фильма');
                 }
             }, function (err) {
                 _this.activity.loader(false);
                 _this.showEmpty('Не удалось открыть страницу фильма на ' + PLUGIN_NAME);
+            }, false, {
+                dataType: 'text'
             });
         };
 
-        // Загрузка данных из плеера api.ortified.ws/embed/kp/{id}
-        this.loadBalancer = function (kpId, callback) {
+        // Загрузка данных из плеера api.ortified.ws/embed/{kp/... или imdb/...}
+        this.loadBalancer = function (endpoint, callback) {
             var _this = this;
-            var balancerUrl = BALANCER_HOST + '/embed/kp/' + kpId + '?host=lordfilm.fi';
+            var balancerUrl = BALANCER_HOST + '/embed/' + endpoint + '?host=lordfilm.fi';
 
             network.clear();
             network.timeout(12000);
-            network.native(balancerUrl, function (html) {
+            network.silent(balancerUrl, function (html) {
                 var find = (html || '').replace(/\n/g, '').match(/makePlayer\(({.*?})\);/);
                 var data = null;
 
@@ -324,6 +328,8 @@
                 }
             }, function (err) {
                 if (callback) callback(false);
+            }, false, {
+                dataType: 'text'
             });
         };
 
@@ -337,7 +343,6 @@
             filter_items.voice = [];
 
             if (playerData.playlist && playerData.playlist.seasons) {
-                // Сортировка сезонов по возрастанию
                 playerData.playlist.seasons.sort(function (a, b) {
                     return a.season - b.season;
                 });
@@ -348,7 +353,6 @@
 
                 if (choice.season >= filter_items.season.length) choice.season = 0;
 
-                // Озвучки текущего сезона/эпизода
                 var curSeason = playerData.playlist.seasons[choice.season];
                 if (curSeason && curSeason.episodes && curSeason.episodes[0] && curSeason.episodes[0].audio) {
                     filter_items.voice = curSeason.episodes[0].audio.names || [];
@@ -375,7 +379,6 @@
                 return;
             }
 
-            // Обновляем список озвучек для выбранного сезона
             if (playerData && playerData.playlist && playerData.playlist.seasons) {
                 var curSeason = playerData.playlist.seasons[choice.season];
                 if (curSeason && curSeason.episodes && curSeason.episodes[0] && curSeason.episodes[0].audio) {
@@ -392,7 +395,7 @@
             this.renderList();
         };
 
-        // Вспомогательное контекстное меню для элемента
+        // Контекстное меню для элемента
         this.bindContextMenu = function (item, fileHash) {
             item.on('hover:long', function () {
                 var enabled = Lampa.Controller.enabled().name;
@@ -486,22 +489,16 @@
                         '</div>'
                     ].join(''));
 
-                    // Подготовка элемента плейлиста для Lampa.Player
                     var streamUrl = ep.hls || ep.dash || '';
                     var subtitles = (ep.cc || []).map(function (sub) {
-                        return {
-                            label: sub.name,
-                            url: sub.url
-                        };
+                        return { label: sub.name, url: sub.url };
                     });
 
                     var playCell = {
                         title: search_title + ' (' + seasonObj.season + 'x' + ep.episode + ')',
                         url: streamUrl,
                         subtitles: subtitles,
-                        timeline: {
-                            hash: fileHash
-                        }
+                        timeline: { hash: fileHash }
                     };
                     playlist.push(playCell);
 
@@ -519,7 +516,7 @@
                     scroll.append(item);
                 });
             }
-            // 2. ОДИНОЧНЫЙ ФИЛЬМ
+            // 2. ФИЛЬМ
             else if (playerData.source) {
                 var streamUrl = playerData.source.hls || playerData.source.dash || '';
                 var currentVoice = filter_items.voice[choice.voice] || 'Стандартная дорожка';
@@ -527,10 +524,7 @@
                 var isViewed = viewed_files.indexOf(fileHash) !== -1;
 
                 var subtitles = (playerData.source.cc || []).map(function (sub) {
-                    return {
-                        label: sub.name,
-                        url: sub.url
-                    };
+                    return { label: sub.name, url: sub.url };
                 });
 
                 var item = $([
@@ -553,9 +547,7 @@
                     title: (playerData.title || search_title) + ' [' + currentVoice + ']',
                     url: streamUrl,
                     subtitles: subtitles,
-                    timeline: {
-                        hash: fileHash
-                    }
+                    timeline: { hash: fileHash }
                 };
 
                 item.on('hover:enter', function () {
@@ -575,19 +567,16 @@
             Lampa.Controller.enable('content');
         };
 
-        // Запуск воспроизведения
         this.playItem = function (firstItem, playlist, startIndex, fileHash, elementDom) {
             if (!firstItem.url) {
                 Lampa.Noty.show('Ссылка на видео не найдена');
                 return;
             }
 
-            // Добавляем в историю просмотров Lampa
             if (current_movie.id) {
                 Lampa.Favorite.add('history', current_movie, 100);
             }
 
-            // Отмечаем как просмотренное
             var viewed_files = Lampa.Storage.cache('online_viewed', 500, []);
             if (viewed_files.indexOf(fileHash) === -1) {
                 viewed_files.push(fileHash);
@@ -597,7 +586,6 @@
                 }
             }
 
-            // Воспроизведение через плеер Lampa
             Lampa.Player.play(firstItem);
 
             if (playlist && playlist.length > 1) {
@@ -625,19 +613,13 @@
                     if (Navigator.canmove('left')) Navigator.move('left');
                     else Lampa.Controller.toggle('menu');
                 },
-                right: function () {
-                    Navigator.move('right');
-                },
+                right: function () { Navigator.move('right'); },
                 up: function () {
                     if (Navigator.canmove('up')) Navigator.move('up');
                     else Lampa.Controller.toggle('head');
                 },
-                down: function () {
-                    Navigator.move('down');
-                },
-                back: function () {
-                    Lampa.Activity.backward();
-                }
+                down: function () { Navigator.move('down'); },
+                back: function () { Lampa.Activity.backward(); }
             });
 
             Lampa.Controller.toggle('content');
@@ -654,7 +636,6 @@
         };
     }
 
-    // Инициализация кнопки в карточке фильма/сериала
     function initCardButton() {
         var buttonTemplate = [
             '<div class="full-start__button selector view--lordfilm" data-subtitle="Lordfilm.fi">',
@@ -691,7 +672,6 @@
         });
     }
 
-    // Добавление параметров в настройки Lampa
     function initSettings() {
         if (Lampa.SettingsApi) {
             Lampa.SettingsApi.addComponent({
@@ -720,17 +700,14 @@
                     name: 'lordfilm_proxy',
                     type: 'select',
                     values: {
-                        'auto': 'Автоматически (CORS для web)',
-                        'none': 'Напрямую (без прокси)',
-                        'worker1': 'CORS Worker 1',
-                        'worker2': 'CORS Worker 2',
-                        'custom': 'Пользовательский'
+                        'none': 'Напрямую (рекомендуется)',
+                        'custom': 'Пользовательский CORS-прокси'
                     },
-                    default: 'auto'
+                    default: 'none'
                 },
                 field: {
                     name: 'Проксирование запросов',
-                    description: 'Использовать прокси для браузера или обхода блокировок'
+                    description: 'Используйте свой CORS-прокси, если сайт заблокирован'
                 }
             });
 
@@ -750,7 +727,6 @@
         }
     }
 
-    // Регистрация в плагинах Lampa
     function initPlugin() {
         Lampa.Component.add('lordfilm', Component);
 
@@ -761,10 +737,7 @@
             description: 'Просмотр фильмов и сериалов онлайн с Lordfilm.fi',
             component: 'lordfilm',
             onContextMenu: function (object) {
-                return {
-                    name: 'Lordfilm',
-                    description: 'Смотреть онлайн на Lordfilm'
-                };
+                return { name: 'Lordfilm', description: 'Смотреть онлайн на Lordfilm' };
             },
             onContextLauch: function (object) {
                 Lampa.Component.add('lordfilm', Component);
@@ -779,10 +752,8 @@
             }
         };
 
-        if (Lampa.Manifest && Lampa.Manifest.plugins) {
-            if (Array.isArray(Lampa.Manifest.plugins)) {
-                Lampa.Manifest.plugins.push(manifest);
-            }
+        if (Lampa.Manifest && Lampa.Manifest.plugins && Array.isArray(Lampa.Manifest.plugins)) {
+            Lampa.Manifest.plugins.push(manifest);
         }
 
         addStyles();
@@ -790,7 +761,6 @@
         initSettings();
     }
 
-    // Точка входа
     if (window.Lampa && Lampa.Listener) {
         initPlugin();
     } else {
