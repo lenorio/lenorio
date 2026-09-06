@@ -1,12 +1,10 @@
 (function () {
     'use strict';
 
-    // Защита от повторной инициализации
-    if (window.plugin_lordfilm_ready) return;
     window.plugin_lordfilm_ready = true;
 
     var PLUGIN_NAME = 'Lordfilm.fi';
-    var PLUGIN_VERSION = '1.0.1';
+    var PLUGIN_VERSION = '1.0.2';
     var DEFAULT_DOMAIN = 'https://lordfilm.fi';
     var BALANCER_HOST = 'https://api.ortified.ws';
 
